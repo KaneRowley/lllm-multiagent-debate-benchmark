@@ -86,7 +86,7 @@ def main():
         model=model,
         messages=messages,
         tools=tools,
-        tool_choice="required",
+        tool_choice="auto",
     )
 
     assistant_message = response.choices[0].message
