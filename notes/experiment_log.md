@@ -6,7 +6,7 @@ Ask prompt -> LLM thinks -> it returns a tool-call request -> Python interprets 
 
 Motivation of tool-use implementation
 
-I first let a single Qwen3 have a go at numerous arithmetic problems. In particular, I asked:
+I first let a single Qwen3 have a go at numerous arithmetic problems (in terminal, not on hello_model.py. In particular, I asked:
 "A shop sells 17 boxes of pencils. "
                     "Each box contains 24 pencils. "
                     "How many pencils are there altogether?"
@@ -20,3 +20,16 @@ distributive property: 17×24 = 17×(20+4) = (17×20) + (17×4).
 
 Rather than "mentally" working what 17 x 24, it simplifies the problem by using the distributive property. While this does reach the same answer (although the model makes sure it is correct by using alternative methods) I thought why not provide Qwen with a calculator? When faced with similar or harder problems, Qwen will constantly check each arithmetic it will do and be stuck when it calculates the wrong answer. By providing a calculator, we can provide strong evidence that it is correct which may increase its accuracy and computation time.
 
+Hypothesis
+
+This raises multiple questions:
+
+1)Could a calculator produce a more reliable arithmetic result than relying on the LLM's generated answer?
+2)Would the LLM recognise when using the calculator is worthwhile, and invoke it appropriately?
+3)Does using a calculator actually reduce computation time, or does the extra model interaction outweigh the time saved? 
+4)Does the tool increase the model's accuracy?
+5)Can unessecary tool calls make model's performance worse?
+
+My hypothesis is that the calculator tool gives strong evidence to Qwen, but it may be overreliant on it causing it to think less itself. I believe computational time will be saved for simple arithmetic problems, but it may prolong problems that require multiple of these.
+
+I will try to send more problems for Qwen to solve, using and without using a calculator and compare its performance.
