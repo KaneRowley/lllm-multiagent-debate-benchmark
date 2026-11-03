@@ -1,2 +1,4 @@
-openai
-python-dotenv
+openai==3.41.0
+python-dotenv==1.2.4
+datasets==5.1.0
+pytest==9.2.0
