@@ -92,7 +92,9 @@ def main():
     assistant_message = response.choices[0].message
 
     if not assistant_message.tool_calls:
-        raise RuntimeError("The model did not request a tool.")
+        print("Model answered without using a tool.")
+        print(assistant_message.content)
+        return
 
     # Record the model's requested tool call.
     messages.append(
