@@ -2,7 +2,7 @@ import re
 from decimal import Decimal
 import os
 from pathlib import Path
-from load_data import extract_ground_truth, load_development_data
+from src.load_data import extract_ground_truth, load_development_data
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -25,8 +25,6 @@ def main():
     project_root = Path(__file__).resolve().parents[1]
     load_dotenv(project_root / ".env")
     
-    development_questions = load_development_data()
-    question = development_questions[0]["question"]
     # Get the model name.
     model = os.getenv("MODEL_ID", "qwen3:4b")
 
@@ -36,47 +34,64 @@ def main():
         api_key="ollama",
     )
 
-    # Send a question to the model.
+    # Keep track of the number of correct answers and parsing failures.
+    correct_count = 0
+    parsing_failures = 0
+    development_questions = load_development_data()
+    questions_to_run = development_questions.select(range(3))
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "Solve the following mathematics problem. "
-                    "Explain your solution, then finish with a separate line "
-                    "in this exact format:\n"
-                    "FINAL ANSWER: <number>\n\n"
-                    f"Problem:\n{question}"
-                ),
-            }
-        ],
-    )
-    model_text = response.choices[0].message.content or ""
-    model_answer = extract_model_answer(model_text)
+    for example in questions_to_run:
+        question = example["question"]
+        
+        # Send a question to the model.
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Solve the following mathematics problem. "
+                        "Explain your solution, then finish with a separate line "
+                        "in this exact format:\n"
+                        "FINAL ANSWER: <number>\n\n"
+                        f"Problem:\n{question}"
+                    ),
+                }
+            ],
+        )
+        model_text = response.choices[0].message.content or ""
+        model_answer = extract_model_answer(model_text)
 
-    # Assumes "answer" contains GSM8K's original worked solution.
-    reference_solution = development_questions[0]["answer"]
-    correct_answer = Decimal(str(extract_ground_truth(reference_solution)))
+        # Assumes "answer" contains GSM8K's original worked solution.
+        reference_solution = example["answer"]
+        correct_answer = extract_ground_truth(reference_solution)
 
-    print("Model answer:", model_answer)
-    print("Correct answer:", correct_answer)
+        print("Model answer:", model_answer)
+        print("Correct answer:", correct_answer)
 
-    if model_answer is None:
-        print("Could not extract the model's answer.")
-    else:
-        print("Correct:", model_answer == correct_answer)
+        if model_answer is None:
+            print("Could not extract the model's answer.")
+        else:
+            print("Correct:", model_answer == correct_answer)
+
+        
+        print("\nQuestion:\n")
+        print(question)
+        print("\nModel response:\n")
+        print(response.choices[0].message.content)
+
+        if model_answer is None:
+            parsing_failures += 1
+        elif model_answer == correct_answer:
+            correct_count += 1
+
+    total = len(questions_to_run)
+
+    print(f"Correct: {correct_count}/{total}")
+    print(f"Accuracy: {correct_count / total:.1%}")
+    print(f"Parsing failures: {parsing_failures}")
 
     
-    print("\nQuestion:\n")
-    print(question)
-    print("\nModel response:\n")
-    print(response.choices[0].message.content)
-
-    
-
-
 if __name__ == "__main__":
     main()
 
