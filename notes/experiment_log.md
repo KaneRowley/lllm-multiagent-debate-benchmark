@@ -35,3 +35,5 @@ My hypothesis is that the calculator tool gives strong evidence to Qwen, but it 
 I will try to send more problems for Qwen to solve, using and without using a calculator and compare its performance.
 
 November 3 - I wanted to prepare a small development dataset so I can test my model on mathematical questions. I used the GSM8K benchmark dataset and loaded its training split and selected 30 development questions randomly. Added a ground-truth extraction function which extracts the numerical answer after ####. I used Codex to help me add stricter answer validation. I will load test split when evaluating models. Plan to run these questions on a single model with/without a tool.
+
+November 4 - I ran the questions on colab as my cpu couldnt handle the power. 90% accuracy with two answer-parsing failures in approximately 10 minutes on T4 GPU. Want to improve answer extraction, save structured results, and compare against the same model with calculator access.

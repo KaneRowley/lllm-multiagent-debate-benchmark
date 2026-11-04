@@ -1,15 +1,18 @@
 import re
+import time
 from decimal import Decimal
 import os
 from pathlib import Path
-from src.load_data import extract_ground_truth, load_development_data
+from load_data import extract_ground_truth, load_development_data
 from dotenv import load_dotenv
 from openai import OpenAI
 
 def extract_model_answer(text):
-    # Extract the final numerical answer from the model's response.
     match = re.search(
-        r"^FINAL ANSWER:\s*([-+]?\d+(?:\.\d+)?)\s*$",
+        r"^FINAL ANSWER:[ \t]*(?:"
+        r"([-+]?\d+(?:\.\d+)?)"
+        r"|<([-+]?\d+(?:\.\d+)?)>"
+        r")[ \t]*$",
         text,
         flags=re.MULTILINE,
     )
@@ -17,7 +20,8 @@ def extract_model_answer(text):
     if match is None:
         return None
 
-    return Decimal(match.group(1))
+    number = match.group(1) or match.group(2)
+    return Decimal(number)
 
 
 def main():
@@ -42,23 +46,25 @@ def main():
 
     for example in questions_to_run:
         question = example["question"]
-        
+        print(f"\n--- Question ID: gsm8k/train/{example['source_index']} ---")
+        start = time.perf_counter()
         # Send a question to the model.
         response = client.chat.completions.create(
             model=model,
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        "Solve the following mathematics problem. "
-                        "Explain your solution, then finish with a separate line "
-                        "in this exact format:\n"
-                        "FINAL ANSWER: <number>\n\n"
-                        f"Problem:\n{question}"
+                    "content": ("Explain your solution, then finish with a separate line "
+                                "containing FINAL ANSWER: followed by the number only. "
+                                "Do not include angle brackets, units, or formatting on that line.\n"
+                                "Example: FINAL ANSWER: 72\n\n"
+                                f"Problem:\n{question}"
                     ),
                 }
             ],
         )
+        elapsed = time.perf_counter() - start
+        print(f"Response time: {elapsed:.2f} seconds")
         model_text = response.choices[0].message.content or ""
         model_answer = extract_model_answer(model_text)
 
