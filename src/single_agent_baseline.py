@@ -92,7 +92,7 @@ def run_benchmark(output):
 
 
 def solve_question(client, model, example, *, use_calculator=False, sample_seed=None,
-                   temperature=None, model_seed=None):
+                   temperature=None, model_seed=None, prompt=None):
     """Return one result, allowing the existing single batch of calculator calls."""
     question = example["question"]
     start = time.perf_counter()
@@ -101,7 +101,7 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
     messages = [
         {
             "role": "user",
-            "content": (
+            "content": prompt if prompt is not None else (
                 "Explain your solution, then finish with a separate line "
                 "containing FINAL ANSWER: followed by the number only. "
                 "Do not include angle brackets, units, or formatting on that line.\n"
