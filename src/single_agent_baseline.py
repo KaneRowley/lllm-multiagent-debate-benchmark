@@ -91,7 +91,8 @@ def run_benchmark(output):
     print(f"Parsing failures: {parsing_failures}")
 
 
-def solve_question(client, model, example, *, use_calculator=False, sample_seed=None):
+def solve_question(client, model, example, *, use_calculator=False, sample_seed=None,
+                   temperature=None, model_seed=None):
     """Return one result, allowing the existing single batch of calculator calls."""
     question = example["question"]
     start = time.perf_counter()
@@ -110,7 +111,12 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
         }
     ]
 
-    request_options = {}
+    generation_options = {}
+    if temperature is not None:
+        generation_options["temperature"] = temperature
+    if model_seed is not None:
+        generation_options["seed"] = model_seed
+    request_options = dict(generation_options)
     if use_calculator:
         request_options["tools"] = CALCULATOR_TOOLS
         request_options["tool_choice"] = "auto"
@@ -147,6 +153,7 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
         response = client.chat.completions.create(
             model=model,
             messages=messages,
+            **generation_options,
         )
         responses.append(response)
     elapsed = time.perf_counter() - start
@@ -177,7 +184,7 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
     "calculator_enabled": use_calculator,
     "calculator_calls": len(tool_calls),
     "model_config": {"model": model, "base_url": str(client.base_url),
-                     "generation_parameters": "server defaults"},
+                     "generation_parameters": generation_options or "server defaults"},
     "sample_seed": sample_seed,
     "dataset_revision": GSM8K_REVISION,
     "token_usage": token_usage,
