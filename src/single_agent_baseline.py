@@ -2,10 +2,22 @@ import re
 import time
 from decimal import Decimal
 import os
+import json
 from pathlib import Path
 from load_data import extract_ground_truth, load_development_data
 from dotenv import load_dotenv
 from openai import OpenAI
+from tool_demo import CALCULATOR_TOOLS, calculate
+
+
+# ===== RUN SETTINGS — EDIT THESE =====
+SAMPLE_SIZE = 30
+SAMPLE_SEED = 2
+USE_CALCULATOR = True
+RESULTS_FILE = (
+    "calculator_results.jsonl" if USE_CALCULATOR else "baseline_results.jsonl"
+)
+# =====================================
 
 def extract_model_answer(text):
     match = re.search(
@@ -41,28 +53,67 @@ def main():
     # Keep track of the number of correct answers and parsing failures.
     correct_count = 0
     parsing_failures = 0
-    development_questions = load_development_data()
-    questions_to_run = development_questions.select(range(3))
+    questions_to_run = load_development_data(
+    sample_size=SAMPLE_SIZE,
+    seed=SAMPLE_SEED,
+    )
 
     for example in questions_to_run:
         question = example["question"]
         print(f"\n--- Question ID: gsm8k/train/{example['source_index']} ---")
         start = time.perf_counter()
+
         # Send a question to the model.
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Explain your solution, then finish with a separate line "
+                    "containing FINAL ANSWER: followed by the number only. "
+                    "Do not include angle brackets, units, or formatting on that line.\n"
+                    "Example: FINAL ANSWER: 72\n\n"
+                    f"Problem:\n{question}"
+                ),
+            }
+        ]
+
+        request_options = {}
+        if USE_CALCULATOR:
+            request_options["tools"] = CALCULATOR_TOOLS
+            request_options["tool_choice"] = "auto"
+
         response = client.chat.completions.create(
             model=model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": ("Explain your solution, then finish with a separate line "
-                                "containing FINAL ANSWER: followed by the number only. "
-                                "Do not include angle brackets, units, or formatting on that line.\n"
-                                "Example: FINAL ANSWER: 72\n\n"
-                                f"Problem:\n{question}"
-                    ),
-                }
-            ],
+            messages=messages,
+            **request_options,
         )
+
+        assistant_message = response.choices[0].message
+        tool_calls = assistant_message.tool_calls or []
+
+        if USE_CALCULATOR and tool_calls:
+            messages.append(assistant_message.model_dump(exclude_none=True))
+
+            for call in tool_calls:
+                if call.function.name == "calculate":
+                    try:
+                        arguments = json.loads(call.function.arguments)
+                        result = str(calculate(**arguments))
+                    except (ValueError, TypeError, ArithmeticError) as exc:
+                        result = f"Calculator error: {exc}"
+                else:
+                    result = "Calculator error: unknown tool."
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": result,
+                })
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+            )
         elapsed = time.perf_counter() - start
         print(f"Response time: {elapsed:.2f} seconds")
         model_text = response.choices[0].message.content or ""
@@ -71,6 +122,24 @@ def main():
         # Assumes "answer" contains GSM8K's original worked solution.
         reference_solution = example["answer"]
         correct_answer = extract_ground_truth(reference_solution)
+
+        record = {
+        "question_id": f"gsm8k/train/{example['source_index']}",
+        "question": question,
+        "model_response": model_text,
+        "model_answer": (
+            str(model_answer) if model_answer is not None else None
+        ),
+        "correct_answer": str(correct_answer),
+        "correct": model_answer == correct_answer,
+        "parsing_success": model_answer is not None,
+        "elapsed_seconds": elapsed,
+        "calculator_enabled": USE_CALCULATOR,
+        "calculator_calls": len(tool_calls),
+        }
+
+        with open(RESULTS_FILE, "a", encoding="utf-8") as file:
+            file.write(json.dumps(record) + "\n")
 
         print("Model answer:", model_answer)
         print("Correct answer:", correct_answer)

@@ -6,6 +6,33 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+CALCULATOR_TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "calculate",
+                "description": "Perform a precise arithmetic calculation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "number"},
+                        "b": {"type": "number"},
+                        "operation": {
+                            "type": "string",
+                            "enum": [
+                                "add",
+                                "subtract",
+                                "multiply",
+                                "divide"
+                            ]
+                        }
+                    },
+                    "required": ["a", "b", "operation"],
+                    "additionalProperties": False
+                }
+            }
+        }
+    ]
 
 def calculate(a: float, b: float, operation: str):
     """Perform one exact arithmetic operation."""
@@ -40,35 +67,6 @@ def main():
         api_key="ollama",
     )
 
-    # Describe the tool that Python makes available.
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "calculate",
-                "description": "Perform a precise arithmetic calculation.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "a": {"type": "number"},
-                        "b": {"type": "number"},
-                        "operation": {
-                            "type": "string",
-                            "enum": [
-                                "add",
-                                "subtract",
-                                "multiply",
-                                "divide"
-                            ]
-                        }
-                    },
-                    "required": ["a", "b", "operation"],
-                    "additionalProperties": False
-                }
-            }
-        }
-    ]
-
     messages = [
         {
             "role": "user",
@@ -78,14 +76,13 @@ def main():
                 "You must use the calculate tool to multiply "
                 "17 by 24, then give me the final answer."
             )
-        }
-    ]
+        }]
 
     # Ask the model to make a tool call.
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        tools=tools,
+        tools=CALCULATOR_TOOLS,
         tool_choice="auto",
     )
 
