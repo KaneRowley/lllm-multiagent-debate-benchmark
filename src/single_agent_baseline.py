@@ -76,14 +76,15 @@ def request_model(client, *, request_log, stage, **options):
     return response
 
 
-def warm_up_model(client, model, enabled=True):
+def warm_up_model(client, model, enabled=True, max_tokens=8):
     """One small unscored request before the benchmark; log its separate cost."""
     requests = []
     if enabled:
         request_model(client, request_log=requests, stage="warm_up", model=model,
-                      messages=[{"role": "user", "content": "Reply with OK."}], max_tokens=8)
+                      messages=[{"role": "user", "content": "Reply with OK."}],
+                      max_tokens=max_tokens)
     return {"policy": "one_request_excluded" if enabled else "disabled",
-            "requests": requests, "max_tokens": 8 if enabled else None}
+            "requests": requests, "max_tokens": max_tokens if enabled else None}
 
 
 def main():
