@@ -31,6 +31,8 @@ def test_snapshot_sharing_votes_and_totals(monkeypatch):
     assert result["token_usage"] == {"prompt_tokens": 60, "completion_tokens": 30, "total_tokens": 90}
     assert result["elapsed_seconds"] == 6
     assert result["model_requests"] == 6
+    assert result["calculator_enabled"] is False
+    assert result["calculator_calls"] == 0
     assert [r["seed"] for r in requests] == [101, 102, 103, 101, 102, 103]
     for request in requests:
         assert request["model"] == "qwen3:4b" and request["temperature"] == 0.7
@@ -78,3 +80,88 @@ def test_runner_saves_both_rounds_and_protects_output(tmp_path, monkeypatch):
         debate.main()
     assert path.read_bytes() == saved
     assert client.chat.completions.create.call_count == 6
+
+
+@pytest.mark.parametrize("missing_usage", [False, True])
+def test_calculator_both_rounds_and_snapshot(monkeypatch, missing_usage):
+    initial = [f"INITIAL_{i}\nFINAL ANSWER: 6" for i in range(3)]
+    revised = [f"REVISED_{i}\nFINAL ANSWER: 7" for i in range(3)]
+    texts = initial + revised
+    replies = []
+    first_requests = []
+    followups = []
+    usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    for index, text in enumerate(texts):
+        first_requests.append(len(replies))
+        if index in (0, 2, 3, 5):
+            calls = [{"id": f"call-{index}", "type": "function", "function": {
+                "name": "calculate", "arguments": '{"a":2,"b":3,"operation":"multiply"}'}}]
+            if index == 0:
+                calls.append({"id": "extra", "type": "function", "function": {
+                    "name": "calculate", "arguments": '{"a":6,"b":1,"operation":"add"}'}})
+            replies.append(response(None, calls, usage))
+            followups.append((len(replies), calls))
+        replies.append(response(text, usage=usage))
+    if missing_usage:
+        replies[-1].usage = None
+    requests = []
+    clock = [0.0]
+    def create(**kwargs):
+        requests.append(deepcopy(kwargs))
+        clock[0] += 1.0
+        return replies[len(requests) - 1]
+    client = client_for()
+    client.chat.completions.create.side_effect = create
+    monkeypatch.setattr(baseline.time, "perf_counter", lambda: clock[0])
+    result = debate.solve_with_debate(client, "qwen3:4b", EXAMPLE, use_calculator=True)
+    assert len(requests) == 10
+    assert result["calculator_enabled"] is True
+    assert result["calculator_calls"] == 5
+    assert result["model_requests"] == 10
+    assert result["elapsed_seconds"] == 10.0
+    expected_usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+    if missing_usage:
+        expected_usage = dict.fromkeys(expected_usage)
+    assert result["token_usage"] == expected_usage
+    agents = result["initial_agents"] + result["revised_agents"]
+    assert [a["calculator_calls"] for a in agents] == [2, 0, 1, 1, 0, 1]
+    assert all(a["calculator_enabled"] for a in agents)
+    assert [a["elapsed_seconds"] for a in agents] == [2, 1, 2, 2, 1, 2]
+    for position in first_requests:
+        assert requests[position]["tools"] == baseline.CALCULATOR_TOOLS
+        assert requests[position]["tool_choice"] == "auto"
+    for position, calls in followups:
+        request = requests[position]
+        assert "tools" not in request  # One batch only.
+        results = [m for m in request["messages"] if m["role"] == "tool"]
+        assert [m["tool_call_id"] for m in results] == [c["id"] for c in calls]
+        assert [m["content"] for m in results] == (["6", "7"] if len(calls) == 2 else ["6"])
+    for request in requests:
+        assert request["temperature"] == 0.7
+        text = json.dumps(request["messages"])
+        assert "SECRET_REFERENCE_WORKING" not in text and "98765" not in text
+        assert "correct_answer" not in text and '"correct"' not in text
+        assert "REVISED_" not in text
+    for position in first_requests[3:]:
+        prompt = requests[position]["messages"][0]["content"]
+        assert all(prompt.count(text) == 1 for text in initial)
+    assert result["initial_vote"] == "6"
+    assert result["final_vote"] == "7"
+
+
+def test_calculator_runner_metadata(tmp_path, monkeypatch):
+    path = tmp_path / "calculator_debate_results.jsonl"
+    monkeypatch.setattr(debate, "RESULTS_FILE", path)
+    monkeypatch.setattr(debate, "USE_CALCULATOR", True)
+    monkeypatch.setattr(debate, "load_dotenv", Mock())
+    monkeypatch.setattr(debate, "load_development_data", Mock(return_value=[EXAMPLE]))
+    client = client_for(*[response() for _ in range(6)])
+    monkeypatch.setattr(debate, "OpenAI", Mock(return_value=client))
+    debate.main()
+    saved = path.read_bytes()
+    record = json.loads(saved)
+    assert record["calculator_enabled"] is True and record["calculator_calls"] == 0
+    assert all(call.kwargs["tool_choice"] == "auto" for call in client.chat.completions.create.call_args_list)
+    with pytest.raises(FileExistsError):
+        debate.main()
+    assert path.read_bytes() == saved

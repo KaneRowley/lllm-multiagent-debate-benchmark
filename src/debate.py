@@ -21,7 +21,10 @@ SAMPLE_SIZE = 3
 SAMPLE_SEED = 2
 TEMPERATURE = 0.7
 MODEL_SEEDS = (101, 102, 103)
-RESULTS_FILE = "debate_results.jsonl"
+USE_CALCULATOR = False
+RESULTS_FILE = (
+    "calculator_debate_results.jsonl" if USE_CALCULATOR else "debate_results.jsonl"
+)
 # ======================================
 
 
@@ -42,15 +45,15 @@ def revision_prompt(question, initial_solutions, agent_index):
 
 
 def solve_with_debate(client, model, example, *, temperature=0.7,
-                      model_seeds=(101, 102, 103), sample_seed=None):
+                      model_seeds=(101, 102, 103), sample_seed=None, use_calculator=False):
     initial = solve_with_voting(client, model, example, temperature=temperature,
-                               model_seeds=model_seeds, sample_seed=sample_seed)
+                               model_seeds=model_seeds, sample_seed=sample_seed, use_calculator=use_calculator,)
     # Freeze response texts before any revisions. Every agent sees this same snapshot.
     snapshot = tuple(agent["model_response"] for agent in initial["agents"])
     revised = []
     for index, seed in enumerate(model_seeds):
         prompt = revision_prompt(example["question"], snapshot, index)
-        result = solve_question(client, model, example, use_calculator=False,
+        result = solve_question(client, model, example, use_calculator=use_calculator,
                                 temperature=temperature, model_seed=seed,
                                 sample_seed=sample_seed, prompt=prompt)
         result["agent_id"] = index + 1
@@ -73,6 +76,8 @@ def solve_with_debate(client, model, example, *, temperature=0.7,
         "temperature": temperature,
         "model_seeds": list(model_seeds),
         "revision_rounds": 1,
+        "calculator_enabled": use_calculator,
+        "calculator_calls": sum(agent["calculator_calls"] for agent in all_agents),
         "initial_agents": initial["agents"],
         "revised_agents": revised,
         "initial_vote": initial["majority_answer"],
@@ -97,7 +102,7 @@ def main():
         final_correct = 0
         for example in examples:
             result = solve_with_debate(client, model, example, temperature=TEMPERATURE,
-                                       model_seeds=MODEL_SEEDS, sample_seed=SAMPLE_SEED)
+                                       model_seeds=MODEL_SEEDS, sample_seed=SAMPLE_SEED, use_calculator=USE_CALCULATOR)
             result["sample_size"] = SAMPLE_SIZE
             output.write(json.dumps(result) + "\n")
             output.flush()

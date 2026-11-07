@@ -46,13 +46,13 @@ def majority_vote(answers):
 
 
 def solve_with_voting(client, model, example, *, temperature=0.7,
-                      model_seeds=(101, 102, 103), sample_seed=None):
+                      model_seeds=(101, 102, 103), sample_seed=None, use_calculator=False):
     if len(model_seeds) != 3:
         raise ValueError("Provide exactly three model seeds.")
     agents = []
     for agent_id, seed in enumerate(model_seeds, start=1):
         # solve_question constructs a fresh conversation on every call.
-        result = solve_question(client, model, example, use_calculator=False,
+        result = solve_question(client, model, example, use_calculator=use_calculator,
                                 sample_seed=sample_seed, temperature=temperature,
                                 model_seed=seed)
         result["agent_id"] = agent_id
