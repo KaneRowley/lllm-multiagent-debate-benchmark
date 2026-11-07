@@ -1,4 +1,4 @@
-"""Compare server-default and smaller per-request budgets on three dev questions."""
+"""Run a 2048-token-per-request pilot on three development questions."""
 import json
 import os
 from pathlib import Path
@@ -14,8 +14,8 @@ else:
     from load_data import load_development_data
     from single_agent_baseline import warm_up_model
 
-BUDGETS = (None, 512)
-RESULTS_FILE = "budget_pilot_results.jsonl"
+BUDGETS = (2048,)
+RESULTS_FILE = "budget_pilot_2048_results.jsonl"
 USE_CALCULATOR = True
 
 
@@ -29,7 +29,7 @@ def main():
             warm = warm_up_model(client, model)
             agents = []
             correct = 0
-            for example in examples:
+            for question_number, example in enumerate(examples, start=1):
                 result = solve_with_debate(client, model, example, temperature=0.7,
                                            model_seeds=(101, 102, 103), sample_seed=2,
                                            use_calculator=USE_CALCULATOR, max_tokens=budget)
@@ -38,6 +38,13 @@ def main():
                 output.flush()
                 agents.extend(result["initial_agents"] + result["revised_agents"])
                 correct += result["final_correct"]
+                print(
+                    f"Completed question {question_number}/{len(examples)} | "
+                    f"{result['question_id']} | vote={result['final_vote']} | "
+                    f"correct={result['final_correct']} | "
+                    f"time={result['elapsed_seconds']:.2f}s",
+                    flush=True,
+                )
             requests = [request for agent in agents for request in agent["request_log"]]
             print(json.dumps({
                 "budget": budget, "questions": 3, "final_correct": correct,

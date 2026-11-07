@@ -61,23 +61,40 @@ def test_warmup_and_truncation():
     assert result["request_log"][0]["finish_reason"] == "length"
 
 
-def test_budget_pilot_records_two_budgets(tmp_path, monkeypatch, capsys):
+def test_budget_pilot_records_only_2048(tmp_path, monkeypatch, capsys):
     from src import budget_pilot
     path = tmp_path / "pilot.jsonl"
     monkeypatch.setattr(budget_pilot, "RESULTS_FILE", path)
     monkeypatch.setattr(budget_pilot, "load_dotenv", Mock())
     monkeypatch.setattr(budget_pilot, "load_development_data", Mock(return_value=[EXAMPLE] * 3))
-    client = client_for(*[response() for _ in range(38)])
+    client = client_for(*[response() for _ in range(19)])
     monkeypatch.setattr(budget_pilot, "OpenAI", Mock(return_value=client))
     budget_pilot.main()
     records = [json.loads(line) for line in path.read_text().splitlines()]
-    assert len(records) == 6
-    assert [r["max_tokens_per_request"] for r in records] == [None] * 3 + [512] * 3
+    assert len(records) == 3
+    assert [r["max_tokens_per_request"] for r in records] == [2048] * 3
     assert all(r["model_requests"] == 6 for r in records)
     assert all(r["warm_up"]["policy"] == "one_request_excluded" for r in records)
-    summaries = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [r["budget"] for r in summaries] == [None, 512]
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 4
+    for number, line in enumerate(lines[:3], start=1):
+        assert line.startswith(f"Completed question {number}/3")
+    summaries = [json.loads(lines[-1])]
+    assert [r["budget"] for r in summaries] == [2048]
     assert all(r["requests_finished_length"] == 0 for r in summaries)
+    calls = client.chat.completions.create.call_args_list
+    assert len(calls) == 19  # One excluded warm-up plus eighteen agent requests.
+    assert calls[0].kwargs["max_tokens"] == 8
+    assert all(call.kwargs["max_tokens"] == 2048 for call in calls[1:])
+    assert all(call.kwargs["temperature"] == 0.7 for call in calls[1:])
+    assert [call.kwargs["seed"] for call in calls[1:]] == [101, 102, 103] * 6
+    assert all(call.kwargs["tool_choice"] == "auto" for call in calls[1:])
+    budget_pilot.load_development_data.assert_called_once_with(sample_size=3, seed=2)
+    saved = path.read_bytes()
+    with pytest.raises(FileExistsError):
+        budget_pilot.main()
+    assert path.read_bytes() == saved
+    assert client.chat.completions.create.call_count == 19
 
 
 def test_failed_calculation_is_auditable():
