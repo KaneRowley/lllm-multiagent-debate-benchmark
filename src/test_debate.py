@@ -66,6 +66,7 @@ def test_no_majority_and_missing_usage():
 
 def test_runner_saves_both_rounds_and_protects_output(tmp_path, monkeypatch):
     path = tmp_path / "debate.jsonl"
+    monkeypatch.setattr(debate, "WARM_UP", False)
     monkeypatch.setattr(debate, "RESULTS_FILE", path)
     monkeypatch.setattr(debate, "load_dotenv", Mock())
     monkeypatch.setattr(debate, "load_development_data", Mock(return_value=[EXAMPLE]))
@@ -151,6 +152,7 @@ def test_calculator_both_rounds_and_snapshot(monkeypatch, missing_usage):
 
 def test_calculator_runner_metadata(tmp_path, monkeypatch):
     path = tmp_path / "calculator_debate_results.jsonl"
+    monkeypatch.setattr(debate, "WARM_UP", False)
     monkeypatch.setattr(debate, "RESULTS_FILE", path)
     monkeypatch.setattr(debate, "USE_CALCULATOR", True)
     monkeypatch.setattr(debate, "load_dotenv", Mock())

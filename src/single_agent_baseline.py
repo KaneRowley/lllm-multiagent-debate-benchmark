@@ -1,6 +1,7 @@
 import re
 import time
 from decimal import Decimal
+from fractions import Fraction
 import os
 import json
 from pathlib import Path
@@ -18,26 +19,71 @@ from openai import OpenAI
 SAMPLE_SIZE = 30
 SAMPLE_SEED = 2
 USE_CALCULATOR = True
+MAX_TOKENS = None  # Per request; try 512 in a separate development run.
+WARM_UP = True
 RESULTS_FILE = (
     "calculator_results.jsonl" if USE_CALCULATOR else "baseline_results.jsonl"
 )
 # =====================================
 
 def extract_model_answer(text):
-    match = re.search(
-        r"^FINAL ANSWER:[ \t]*(?:"
-        r"([-+]?\d+(?:\.\d+)?)"
-        r"|<([-+]?\d+(?:\.\d+)?)>"
-        r")[ \t]*$",
-        text,
-        flags=re.MULTILINE,
-    )
+    # Ignore completed thinking blocks and inspect only the last explicit answer.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    markers = list(re.finditer(r"final\s+answer\b", text, re.IGNORECASE))
+    if markers:
+        candidate = text[markers[-1].end():].strip().lstrip(":").strip()
+    else:
+        # A standalone boxed answer is also an explicit final-answer convention.
+        boxes = list(re.finditer(r"\\boxed\{", text))
+        if not boxes:
+            return None
+        candidate = text[boxes[-1].start():].strip()
+    # Some responses say "the final answer is" before a standalone boxed value.
+    if r"\boxed{" in candidate:
+        candidate = candidate[candidate.rfind(r"\boxed{"):]
+    candidate = candidate.replace("**", "").strip().lstrip(":").strip()
+    candidate = candidate.strip("$ \t\r\n")
+    if candidate.startswith(r"\boxed{") and candidate.endswith("}"):
+        candidate = candidate[7:-1].strip()
+    candidate = re.sub(r"\\(?:dfrac|frac)\{([-+]?\d+)\}\{([-+]?\d+)\}", r"\1/\2", candidate)
+    if candidate.startswith("<") and candidate.endswith(">"):
+        candidate = candidate[1:-1].strip()
+    number = r"[-+]?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?"
+    if re.fullmatch(number, candidate):
+        return Decimal(candidate.replace(",", ""))
+    if re.fullmatch(r"[-+]?\d+\s*/\s*[-+]?\d+", candidate):
+        numerator, denominator = candidate.split("/")
+        if int(denominator) != 0:
+            return Fraction(int(numerator), int(denominator))
+    return None
 
-    if match is None:
-        return None
 
-    number = match.group(1) or match.group(2)
-    return Decimal(number)
+def request_model(client, *, request_log, stage, **options):
+    """Record each API response separately, including empty/tool-only responses."""
+    start = time.perf_counter()
+    response = client.chat.completions.create(**options)
+    elapsed = time.perf_counter() - start
+    choice = response.choices[0]
+    usage = getattr(response, "usage", None)
+    request_log.append({
+        "stage": stage, "elapsed_seconds": elapsed,
+        "token_usage": {name: getattr(usage, name, None) for name in
+                        ("prompt_tokens", "completion_tokens", "total_tokens")},
+        "finish_reason": choice.finish_reason,
+        "content_empty": not (choice.message.content or "").strip(),
+        "content": choice.message.content,
+    })
+    return response
+
+
+def warm_up_model(client, model, enabled=True):
+    """One small unscored request before the benchmark; log its separate cost."""
+    requests = []
+    if enabled:
+        request_model(client, request_log=requests, stage="warm_up", model=model,
+                      messages=[{"role": "user", "content": "Reply with OK."}], max_tokens=8)
+    return {"policy": "one_request_excluded" if enabled else "disabled",
+            "requests": requests, "max_tokens": 8 if enabled else None}
 
 
 def main():
@@ -68,10 +114,13 @@ def run_benchmark(output):
     sample_size=SAMPLE_SIZE,
     seed=SAMPLE_SEED,
     )
+    warm_up = warm_up_model(client, model, WARM_UP)
 
     for example in questions_to_run:
         record = solve_question(client, model, example,
-                                use_calculator=USE_CALCULATOR, sample_seed=SAMPLE_SEED)
+                                use_calculator=USE_CALCULATOR, sample_seed=SAMPLE_SEED,
+                                max_tokens=MAX_TOKENS)
+        record["warm_up"] = warm_up
         record["sample_size"] = SAMPLE_SIZE
         output.write(json.dumps(record) + "\n")
         output.flush()
@@ -92,10 +141,11 @@ def run_benchmark(output):
 
 
 def solve_question(client, model, example, *, use_calculator=False, sample_seed=None,
-                   temperature=None, model_seed=None, prompt=None):
+                   temperature=None, model_seed=None, prompt=None, max_tokens=None):
     """Return one result, allowing the existing single batch of calculator calls."""
     question = example["question"]
-    start = time.perf_counter()
+    request_log = []
+    calculator_log = []
 
     # Send a question to the model.
     messages = [
@@ -112,6 +162,10 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
     ]
 
     generation_options = {}
+    if max_tokens is not None:
+        if type(max_tokens) is not int or max_tokens < 1:
+            raise ValueError("max_tokens must be a positive integer or None.")
+        generation_options["max_tokens"] = max_tokens
     if temperature is not None:
         generation_options["temperature"] = temperature
     if model_seed is not None:
@@ -121,7 +175,7 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
         request_options["tools"] = CALCULATOR_TOOLS
         request_options["tool_choice"] = "auto"
 
-    response = client.chat.completions.create(
+    response = request_model(client, request_log=request_log, stage="answer",
         model=model,
         messages=messages,
         **request_options,
@@ -135,6 +189,7 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
         messages.append(assistant_message.model_dump(exclude_none=True))
 
         for call in tool_calls:
+            arguments = None
             if call.function.name == "calculate":
                 try:
                     arguments = json.loads(call.function.arguments)
@@ -143,6 +198,10 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
                     result = f"Calculator error: {exc}"
             else:
                 result = "Calculator error: unknown tool."
+            calculator_log.append({"tool_call_id": call.id, "name": call.function.name,
+                                   "raw_arguments": call.function.arguments,
+                                   "arguments": arguments, "result": result,
+                                   "failed": result.startswith("Calculator error:")})
 
             messages.append({
                 "role": "tool",
@@ -150,13 +209,13 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
                 "content": result,
             })
 
-        response = client.chat.completions.create(
+        response = request_model(client, request_log=request_log, stage="post_tool",
             model=model,
             messages=messages,
             **generation_options,
         )
         responses.append(response)
-    elapsed = time.perf_counter() - start
+    elapsed = sum(item["elapsed_seconds"] for item in request_log)
     model_text = response.choices[0].message.content or ""
     model_answer = extract_model_answer(model_text)
 
@@ -180,6 +239,10 @@ def solve_question(client, model, example, *, use_calculator=False, sample_seed=
     "correct_answer": str(correct_answer),
     "correct": model_answer == correct_answer,
     "parsing_success": model_answer is not None,
+    "parsing_failure": (None if model_answer is not None else
+                        "empty_content" if not model_text.strip() else "unrecognized_final_answer"),
+    "request_log": request_log,
+    "calculator_log": calculator_log,
     "elapsed_seconds": elapsed,
     "calculator_enabled": use_calculator,
     "calculator_calls": len(tool_calls),

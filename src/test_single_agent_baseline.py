@@ -64,6 +64,7 @@ def test_parsing_failure():
 
 def test_runner_refuses_repeat(tmp_path, monkeypatch):
     path = tmp_path / "results.jsonl"
+    monkeypatch.setattr(baseline, "WARM_UP", False)
     monkeypatch.setattr(baseline, "RESULTS_FILE", path)
     monkeypatch.setattr(baseline, "load_dotenv", Mock())
     monkeypatch.setattr(baseline, "load_development_data", Mock(return_value=[EXAMPLE]))
@@ -81,6 +82,7 @@ def test_runner_refuses_repeat(tmp_path, monkeypatch):
 def test_old_results_are_protected(tmp_path, monkeypatch):
     path = tmp_path / "old.jsonl"
     path.write_text('{"question_id": "old"}\n')
+    monkeypatch.setattr(baseline, "WARM_UP", False)
     monkeypatch.setattr(baseline, "RESULTS_FILE", path)
     with pytest.raises(FileExistsError):
         baseline.main()

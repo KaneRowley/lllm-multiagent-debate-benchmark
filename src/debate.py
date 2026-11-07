@@ -8,16 +8,18 @@ from openai import OpenAI
 
 if __package__:
     from .independent_voting import solve_with_voting, majority_vote
-    from .single_agent_baseline import solve_question
+    from .single_agent_baseline import solve_question, warm_up_model
     from .load_data import load_development_data, extract_ground_truth
 else:
     from independent_voting import solve_with_voting, majority_vote
-    from single_agent_baseline import solve_question
+    from single_agent_baseline import solve_question, warm_up_model
     from load_data import load_development_data, extract_ground_truth
 
 
 # ===== PILOT SETTINGS — EDIT THESE =====
 SAMPLE_SIZE = 3
+MAX_TOKENS = None
+WARM_UP = True
 SAMPLE_SEED = 2
 TEMPERATURE = 0.7
 MODEL_SEEDS = (101, 102, 103)
@@ -45,9 +47,11 @@ def revision_prompt(question, initial_solutions, agent_index):
 
 
 def solve_with_debate(client, model, example, *, temperature=0.7,
-                      model_seeds=(101, 102, 103), sample_seed=None, use_calculator=False):
+                      model_seeds=(101, 102, 103), sample_seed=None, use_calculator=False,
+                      max_tokens=None):
     initial = solve_with_voting(client, model, example, temperature=temperature,
-                               model_seeds=model_seeds, sample_seed=sample_seed, use_calculator=use_calculator,)
+                               model_seeds=model_seeds, sample_seed=sample_seed, use_calculator=use_calculator,
+                               max_tokens=max_tokens)
     # Freeze response texts before any revisions. Every agent sees this same snapshot.
     snapshot = tuple(agent["model_response"] for agent in initial["agents"])
     revised = []
@@ -55,7 +59,7 @@ def solve_with_debate(client, model, example, *, temperature=0.7,
         prompt = revision_prompt(example["question"], snapshot, index)
         result = solve_question(client, model, example, use_calculator=use_calculator,
                                 temperature=temperature, model_seed=seed,
-                                sample_seed=sample_seed, prompt=prompt)
+                                sample_seed=sample_seed, prompt=prompt, max_tokens=max_tokens)
         result["agent_id"] = index + 1
         result["revision_prompt"] = prompt
         revised.append(result)
@@ -74,6 +78,7 @@ def solve_with_debate(client, model, example, *, temperature=0.7,
         "sample_seed": sample_seed,
         "model": model,
         "temperature": temperature,
+        "max_tokens_per_request": max_tokens,
         "model_seeds": list(model_seeds),
         "revision_rounds": 1,
         "calculator_enabled": use_calculator,
@@ -98,11 +103,14 @@ def main():
     with open(RESULTS_FILE, "x", encoding="utf-8") as output:
         client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
         examples = load_development_data(sample_size=SAMPLE_SIZE, seed=SAMPLE_SEED)
+        warm_up = warm_up_model(client, model, WARM_UP)
         initial_correct = 0
         final_correct = 0
         for example in examples:
             result = solve_with_debate(client, model, example, temperature=TEMPERATURE,
-                                       model_seeds=MODEL_SEEDS, sample_seed=SAMPLE_SEED, use_calculator=USE_CALCULATOR)
+                                       model_seeds=MODEL_SEEDS, sample_seed=SAMPLE_SEED, use_calculator=USE_CALCULATOR,
+                                       max_tokens=MAX_TOKENS)
+            result["warm_up"] = warm_up
             result["sample_size"] = SAMPLE_SIZE
             output.write(json.dumps(result) + "\n")
             output.flush()

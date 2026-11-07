@@ -69,6 +69,7 @@ def test_baseline_defaults_omit_sampling_options():
 
 def test_pilot_writes_results_and_protects_repeat(tmp_path, monkeypatch):
     path = tmp_path / "voting.jsonl"
+    monkeypatch.setattr(voting, "WARM_UP", False)
     monkeypatch.setattr(voting, "RESULTS_FILE", path)
     monkeypatch.setattr(voting, "load_dotenv", Mock())
     monkeypatch.setattr(voting, "load_development_data", Mock(return_value=[EXAMPLE]))

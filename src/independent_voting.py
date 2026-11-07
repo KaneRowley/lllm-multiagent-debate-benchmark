@@ -2,7 +2,7 @@
 import json
 import os
 from collections import Counter
-from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,14 +10,16 @@ from openai import OpenAI
 
 if __package__:
     from .load_data import load_development_data, extract_ground_truth, GSM8K_REVISION
-    from .single_agent_baseline import solve_question
+    from .single_agent_baseline import solve_question, warm_up_model
 else:
     from load_data import load_development_data, extract_ground_truth, GSM8K_REVISION
-    from single_agent_baseline import solve_question
+    from single_agent_baseline import solve_question, warm_up_model
 
 
 # ===== PILOT SETTINGS — EDIT THESE =====
 SAMPLE_SIZE = 3
+MAX_TOKENS = None
+WARM_UP = True
 SAMPLE_SEED = 2
 TEMPERATURE = 0.7
 MODEL_SEEDS = (101, 102, 103)  # Use (None, None, None) to omit API seeds.
@@ -26,7 +28,7 @@ RESULTS_FILE = "independent_voting_results.jsonl"
 
 
 def majority_vote(answers):
-    """Return a Decimal supported by at least two of three answers, else None."""
+    """Return an exact rational supported by at least two answers, else None."""
     if len(answers) != 3:
         raise ValueError("Voting requires exactly three answers.")
     valid = []
@@ -34,11 +36,10 @@ def majority_vote(answers):
         if answer is None:
             continue
         try:
-            number = Decimal(str(answer))
-        except InvalidOperation:
+            number = Fraction(str(answer))
+        except (ValueError, ZeroDivisionError):
             continue
-        if number.is_finite():
-            valid.append(number)
+        valid.append(number)
     for number, count in Counter(valid).items():
         if count >= 2:
             return number
@@ -46,7 +47,8 @@ def majority_vote(answers):
 
 
 def solve_with_voting(client, model, example, *, temperature=0.7,
-                      model_seeds=(101, 102, 103), sample_seed=None, use_calculator=False):
+                      model_seeds=(101, 102, 103), sample_seed=None, use_calculator=False,
+                      max_tokens=None):
     if len(model_seeds) != 3:
         raise ValueError("Provide exactly three model seeds.")
     agents = []
@@ -54,7 +56,7 @@ def solve_with_voting(client, model, example, *, temperature=0.7,
         # solve_question constructs a fresh conversation on every call.
         result = solve_question(client, model, example, use_calculator=use_calculator,
                                 sample_seed=sample_seed, temperature=temperature,
-                                model_seed=seed)
+                                model_seed=seed, max_tokens=max_tokens)
         result["agent_id"] = agent_id
         agents.append(result)
 
@@ -86,11 +88,14 @@ def main():
     with open(RESULTS_FILE, "x", encoding="utf-8") as output:
         client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
         examples = load_development_data(sample_size=SAMPLE_SIZE, seed=SAMPLE_SEED)
+        warm_up = warm_up_model(client, model, WARM_UP)
         correct = 0
         no_majority = 0
         for example in examples:
             result = solve_with_voting(client, model, example, temperature=TEMPERATURE,
-                                       model_seeds=MODEL_SEEDS, sample_seed=SAMPLE_SEED)
+                                       model_seeds=MODEL_SEEDS, sample_seed=SAMPLE_SEED,
+                                       max_tokens=MAX_TOKENS)
+            result["warm_up"] = warm_up
             result["sample_size"] = SAMPLE_SIZE
             output.write(json.dumps(result) + "\n")
             output.flush()
